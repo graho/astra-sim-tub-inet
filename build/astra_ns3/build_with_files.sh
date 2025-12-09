@@ -24,6 +24,10 @@ while [[ $# -gt 0 ]]; do
       NETWORK="$2"
       shift 2
       ;;
+    --system)
+      SYSTEM="$2"
+      shift 2
+      ;;
     -r|--run|-c|--compile|-d|--debug|-l|--clean|-lr|--clean-result|-h|--help)
       CMD="$1"
       shift
@@ -39,7 +43,7 @@ set -- "${POSITIONAL[@]}"
 # Validate required inputs
 if [[ -z "$WORKLOAD" || -z "$LOGICAL_TOPOLOGY" || -z "$NETWORK" ]]; then
   echo "Error: Missing required arguments."
-  echo "Usage: $0 --workload <path> --logical-topology <path> --network <path> [-r|-c|-d|-l|-lr|-h]"
+  echo "  $0 --workload <file> --logical-topology <file> --network <file> [--system <file>] [-r|-c|-d|-l|-lr]"
   exit 1
 fi
 
@@ -59,7 +63,7 @@ function setup {
 
 function compile {
     cd "${NS3_DIR}"
-    ./ns3 configure --enable-mpi
+    ./ns3 configure #--enable-mpi
     ./ns3 build AstraSimNetwork -j 12
     cd "${SCRIPT_DIR}"
 }
