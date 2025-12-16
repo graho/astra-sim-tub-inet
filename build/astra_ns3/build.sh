@@ -1,19 +1,22 @@
 #!/bin/bash
 set -e
+
+nodeNum=8
 # Absolue path to this script
 SCRIPT_DIR=$(dirname "$(realpath $0)")
 # Absolute paths to useful directories
 ASTRA_SIM_DIR="${SCRIPT_DIR:?}"/../../astra-sim
 NS3_DIR="${SCRIPT_DIR:?}"/../../extern/network_backend/ns-3
 # Inputs - change as necessary.
-WORKLOAD="${SCRIPT_DIR:?}"/../../examples/text_converter/text_workloads/AllGather1000000B_8/AllGather1000000B_8
+WORKLOAD="${SCRIPT_DIR:?}"/../../examples/text_converter/text_workloads/AllGather10000B_${nodeNum}/AllGather10000B_${nodeNum}
 #WORKLOAD="${SCRIPT_DIR:?}"/../../examples/network_analytical/workload/AllReduce_1MB
 #WORKLOAD="${SCRIPT_DIR:?}"/../../extern/graph_frontend/chakra/one_comm_coll_node_allgather
 SYSTEM="${SCRIPT_DIR:?}"/../../examples/ns3/system.json
 MEMORY="${SCRIPT_DIR:?}"/../../examples/ns3/remote_memory.json
-LOGICAL_TOPOLOGY="${SCRIPT_DIR:?}"/../../examples/ns3/sample_8nodes_1D.json
+LOGICAL_TOPOLOGY="${SCRIPT_DIR:?}"/../../examples/ns3/sample_${nodeNum}nodes_1D.json
 #LOGICAL_TOPOLOGY="${SCRIPT_DIR:?}"/../../inputs/network/ns3/sample_8nodes_1D.json
 # Note that ONLY this file is relative to NS3_DIR/simulation
+#NETWORK="../../../ns-3/scratch/config/config_ocs_static.txt"
 NETWORK="../../../ns-3/scratch/config/config_ocs_static.txt"
 # Functions
 function setup {

@@ -25,7 +25,7 @@ echo "[ASTRA-sim] Compiling ASTRA-sim with the Analytical Network Backend..."
 echo ""
 
 # Compile
-"${PROJECT_DIR:?}"/build/astra_analytical/build.sh
+#¤"${PROJECT_DIR:?}"/build/astra_analytical/build.sh
 
 echo ""
 echo "[ASTRA-sim] Compilation finished."
@@ -58,12 +58,12 @@ echo "[ASTRA-sim] Running ASTRA-sim Example with Analytical Network Backend..."
 echo ""
 
 # run ASTRA-sim
-"${ASTRA_SIM:?}" \
-    --workload-configuration="${EXAMPLE_DIR:?}"/workload/"${TARGET_WORKLOAD:?}" \
-    --system-configuration="${SYSTEM:?}" \
-    --remote-memory-configuration="${REMOTE_MEMORY:?}" \
-    --network-configuration="${NETWORK:?}"
-
+#"${ASTRA_SIM:?}" \
+#    --workload-configuration="${EXAMPLE_DIR:?}"/workload/"${TARGET_WORKLOAD:?}" \
+#    --system-configuration="${SYSTEM:?}" \
+#    --remote-memory-configuration="${REMOTE_MEMORY:?}" \
+#    --network-configuration="${NETWORK:?}"
+#
 # finalize
 echo ""
 echo "[ASTRA-sim] Finished the execution."

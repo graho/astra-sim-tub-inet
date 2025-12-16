@@ -63,7 +63,7 @@ function setup {
 
 function compile {
     cd "${NS3_DIR}"
-    ./ns3 configure #--enable-mpi
+    ./ns3 configure --enable-mpi
     ./ns3 build AstraSimNetwork -j 12
     cd "${SCRIPT_DIR}"
 }
