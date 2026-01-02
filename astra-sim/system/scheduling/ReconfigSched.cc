@@ -1,5 +1,6 @@
 #include "ReconfigSched.h"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
+#include "astra-sim/system/collective/Swing.hh"
 
 using namespace AstraSim;
 
@@ -48,38 +49,72 @@ bool reconfigSched::sync(Algorithm* algo)
 {
   // we only support HalvingDoubling for now
   const HalvingDoubling* hd = dynamic_cast<const HalvingDoubling*>(algo);
-  NS_ASSERT_MSG(hd, "sync() only works on HalvingDoubling");
+  // tmp workaround for testing swing instanciation
+  const Swing* sw =  dynamic_cast<const Swing*>(algo);
+  NS_ASSERT_MSG(hd || sw, "sync() only works on HalvingDoubling");
 
   // register
   m_algos.push_back(algo);
   m_syncRoundsSeen++;
 
-  // once we've seen all ranks, fire exactly N SyncBarrier events
-  if (m_syncRoundsSeen >= hd->nodes_in_ring) {
-      for (auto* a : m_algos) {
-          int64_t syncInNS = 0;
-          int curRound = hd->total_rounds - hd->stream_count;
-          if (m_isDemandAware && curRound < m_shouldReconfig.size()){
-            if(curRound < 0){
-              printf("ReconfigSched detected negative current round number.\n");
-              exit(-706);
+  // tmp workaround to also support swing, TODO: cleanup with inheritence and unified alog pointer
+  if(hd){
+    // once we've seen all ranks, fire exactly N SyncBarrier events
+    if (m_syncRoundsSeen >= hd->nodes_in_ring) {
+        for (auto* a : m_algos) {
+            int64_t syncInNS = 0;
+            int curRound = hd->total_rounds - hd->stream_count;
+            if (m_isDemandAware && curRound < m_shouldReconfig.size()){
+              if(curRound < 0){
+                printf("ReconfigSched detected negative current round number.\n");
+                exit(-706);
+              }
+              if(m_shouldReconfig[curRound] == true){
+                //printf("%d: RECONFIGURING ACCORDING TO SCHEDULLLEEEEE", ns3::Simulator::Now().GetTimeStep());
+                fflush(stdout);
+                syncInNS = reconfigure(hd,curRound);
+              }
             }
-            if(m_shouldReconfig[curRound] == true){
-              printf("%d: RECONFIGURING ACCORDING TO SCHEDULLLEEEEE", ns3::Simulator::Now().GetTimeStep());
-              fflush(stdout);
-              syncInNS = reconfigure(hd,curRound);
+
+            ns3::Simulator::Schedule(ns3::NanoSeconds(syncInNS), [a]() {
+                a->run(EventType::SyncBarrier, nullptr);
+            });
+        }
+
+        // reset for next round
+        m_syncRoundsSeen = 0;
+        m_algos.clear();
+        return true;
+    }
+  }
+  else if(sw){
+    // once we've seen all ranks, fire exactly N SyncBarrier events
+    if (m_syncRoundsSeen >= sw->nodes_in_ring) {
+        for (auto* a : m_algos) {
+            int64_t syncInNS = 0;
+            int curRound = sw->total_rounds - sw->stream_count;
+            if (m_isDemandAware && curRound < m_shouldReconfig.size()){
+              if(curRound < 0){
+                printf("ReconfigSched detected negative current round number.\n");
+                exit(-706);
+              }
+              if(m_shouldReconfig[curRound] == true){
+                //printf("%d: RECONFIGURING ACCORDING TO SCHEDULLLEEEEE", ns3::Simulator::Now().GetTimeStep());
+                fflush(stdout);
+                syncInNS = reconfigure(sw,curRound);
+              }
             }
-          }
 
-          ns3::Simulator::Schedule(ns3::NanoSeconds(syncInNS), [a]() {
-              a->run(EventType::SyncBarrier, nullptr);
-          });
-      }
+            ns3::Simulator::Schedule(ns3::NanoSeconds(syncInNS), [a]() {
+                a->run(EventType::SyncBarrier, nullptr);
+            });
+        }
 
-      // reset for next round
-      m_syncRoundsSeen = 0;
-      m_algos.clear();
-      return true;
+        // reset for next round
+        m_syncRoundsSeen = 0;
+        m_algos.clear();
+        return true;
+    }
   }
   return false;
 }

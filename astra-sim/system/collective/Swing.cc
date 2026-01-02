@@ -1,0 +1,354 @@
+
+/******************************************************************************
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+*******************************************************************************/
+
+#include "astra-sim/system/collective/Swing.hh"
+#include "astra-sim/system/scheduling/ReconfigSched.h"
+
+#include <cmath>
+#include <iostream>
+
+#include "astra-sim/common/Logging.hh"
+#include "astra-sim/system/PacketBundle.hh"
+#include "astra-sim/system/RecvPacketEventHandlerData.hh"
+
+using namespace AstraSim;
+
+Swing::Swing(ComType type,
+                                 int id,
+                                 RingTopology* ring_topology,
+                                 uint64_t data_size)
+    : Algorithm() {
+    this->comType = type;
+    this->id = id;
+    this->logical_topo = ring_topology;
+    this->data_size = data_size;
+    this->nodes_in_ring = ring_topology->get_nodes_in_ring();
+    this->parallel_reduce = 1;
+    this->total_packets_sent = 0;
+    this->total_packets_received = 0;
+    this->packets_received_this_round = 0;
+    this->free_packets = 0;
+    this->zero_latency_packets = 0;
+    this->non_zero_latency_packets = 0;
+    this->toggle = false;
+    this->name = Name::Swing;
+    this->swing_base_clockwise = true;
+    if (ring_topology->get_dimension() == RingTopology::Dimension::Local) {
+        transmition = MemBus::Transmition::Fast;
+    } else {
+        transmition = MemBus::Transmition::Usual;
+    }
+    switch (type) {
+    case ComType::All_Reduce:
+        stream_count = 2 * log2(nodes_in_ring);
+        break;
+    default:
+        stream_count = log2(nodes_in_ring);
+    }
+    this->total_rounds = stream_count;
+    if (type == ComType::All_Gather) {
+        max_count = 0;
+    } else {
+        max_count = log2(nodes_in_ring);
+    }
+    remained_packets_per_message = 1;
+    remained_packets_per_max_count = 1;
+    switch (type) {
+    // Only supporting ReduceScatter in Swing so far
+    //case ComType::All_Reduce:   
+        //this->final_data_size = data_size;
+        //this->msg_size = data_size / 2;
+        //this->rank_offset = 1;
+        //this->offset_multiplier = 2;
+        //break;
+    //case ComType::All_Gather:
+    //    this->final_data_size = data_size * nodes_in_ring;
+    //    this->msg_size = data_size;
+    //    this->rank_offset = nodes_in_ring / 2;
+    //    this->offset_multiplier = 0.5;
+    //    break;
+    case ComType::Reduce_Scatter:
+        this->final_data_size = data_size / nodes_in_ring;
+        this->msg_size = data_size / 2;
+        this->rank_offset = 1;
+        this->offset_multiplier = 2;
+        break;
+    default:
+        LoggerFactory::get_logger("system::collective::Swing")
+            ->critical(
+                "######### Exiting because of unknown communication type for "
+                "Swing collective algorithm. Swing currently only supports ReduceScatter #########");
+        std::exit(1);
+    }
+   
+    update_partner_for_step(0); // prepare for first round, aka round 0 
+    //RingTopology::Direction direction = specify_direction();
+    //this->curr_receiver = id;
+    //for (int i = 0; i < rank_offset; i++) {
+    //    this->curr_receiver =
+    //        ring_topology->get_receiver(this->curr_receiver, direction);
+    //    this->curr_sender = curr_receiver;
+    //}
+}
+
+int Swing::get_non_zero_latency_packets() {
+    return log2(nodes_in_ring) - 1 * parallel_reduce;
+}
+
+// compute ρ(s) from the paper, indicating hop distance - |ρ(s)|– and direction - ρ(s) < 0 - meaning anti-clockwise base-direction 
+int Swing::compute_rho(int step) {
+    // ρ(s) = sum_{i=0}^s (-2)^i
+    int rho = 0;
+    int term = 1;   // (-2)^0
+    for (int i = 0; i <= step; ++i) {
+        rho += term;
+        term *= -2;
+    }
+    return rho;
+}
+
+void Swing::update_partner_for_step(int curRound) {
+    int rho = compute_rho(curRound); // gives us both distance (|ρ(s)|) and base-direction (i.e. from node 0 PoV) (ρ(s) > 0 => Clockwise)
+    int distance = std::abs(rho);   // hop distance
+
+    if(distance == 0){
+        LoggerFactory::get_logger("system::collective::Swing")->critical(
+        "######### Exiting because invalid zero communication distance in Swing collective #########");
+    std::exit(1);
+    }
+    
+    curr_receiver = id;
+    RingTopology::Direction direction = specify_direction(rho);
+    for (int i = 0; i < distance; ++i) {
+        curr_receiver =
+            ((RingTopology*)logical_topo)->get_receiver(curr_receiver, direction);
+    
+    }
+    curr_sender = curr_receiver;
+}
+
+RingTopology::Direction Swing::specify_direction(int rho) {
+    bool base_clockwise = (rho > 0);
+
+    // Index of this rank in the ring
+    int idx = ((RingTopology*)logical_topo)->get_index_in_ring();
+
+    // Determine whether we're odd or even index, to figure out if we follow base-direction or opposite. Both are necessary for communication _pairs_
+    // This is the same structural idea as in HalvingDoubling.
+    int block_parity = idx % 2;  // 0 or 1
+
+    // Nodes in one half use the base direction;
+    // nodes in the other half use the opposite direction.
+    bool final_clockwise = base_clockwise ^ (block_parity == 1); // uses ^ as logical XOR 
+
+    return final_clockwise
+           ? RingTopology::Direction::Clockwise
+           : RingTopology::Direction::Anticlockwise;
+}
+
+void Swing::run(EventType event, CallData* data) {
+    if (event == EventType::General) {
+        free_packets += 1;
+        ready();
+        iteratable();
+    } else if (event == EventType::PacketReceived) {
+        // wait for all flows of this round (at other ranks) to finish before starting next round
+        reconfigSched::getScheduler().sync(this); // we're noting that this algo has reached here
+        return;
+    }
+    else if(event == EventType::SyncBarrier){
+        // this is our "wake-up" from the scheduler
+        // all ranks have hit the barrier -> send
+        total_packets_received++;
+        insert_packet(nullptr);
+    }
+    else if (event == EventType::StreamInit) {
+        for (int i = 0; i < parallel_reduce; i++) {
+            insert_packet(nullptr);
+        }
+    }
+}
+
+void Swing::release_packets() {
+    for (auto packet : locked_packets) {
+        packet->set_notifier(this);
+    }
+    if (NPU_to_MA == true) {
+        (new PacketBundle(stream->owner, stream, locked_packets, processed,
+                          send_back, msg_size, transmition))
+            ->send_to_MA();
+    } else {
+        (new PacketBundle(stream->owner, stream, locked_packets, processed,
+                          send_back, msg_size, transmition))
+            ->send_to_NPU();
+    }
+    locked_packets.clear();
+}
+
+void Swing::process_stream_count() {
+    if (remained_packets_per_message > 0) {
+        remained_packets_per_message--;
+    }
+    if (id == 0) {
+    }
+    if (remained_packets_per_message == 0 && stream_count > 0) {
+        stream_count--;
+        if (stream_count > 0) {
+            remained_packets_per_message = 1;
+        }
+    }
+    if (remained_packets_per_message == 0 && stream_count == 0 &&
+        stream->state != StreamState::Dead) {
+        stream->changeState(StreamState::Zombie);
+    }
+}
+
+void Swing::process_max_count() {
+    if (remained_packets_per_max_count > 0) {
+        remained_packets_per_max_count--;
+    }
+    if (remained_packets_per_max_count == 0) {
+        // finished the previous round
+        max_count--;
+        release_packets();
+        remained_packets_per_max_count = 1;
+        curr_receiver = id;
+        msg_size /= offset_multiplier;
+        int curRound = this->total_rounds - this->stream_count;
+        update_partner_for_step(curRound + 1); // prepare offset/communication partners for next round
+       
+       // rank_offset *= offset_multiplier;
+       // if (rank_offset == nodes_in_ring && comType == ComType::All_Reduce) {
+       //     offset_multiplier = 0.5;
+       //     rank_offset *= offset_multiplier;
+       //     msg_size /= offset_multiplier;
+       // }
+       // RingTopology::Direction direction = specify_direction();
+       // for (int i = 0; i < rank_offset; i++) {
+       //     curr_receiver = ((RingTopology*)logical_topo)
+       //                         ->get_receiver(curr_receiver, direction);
+       //     curr_sender = curr_receiver;
+       // }
+    }
+}
+
+void Swing::reduce() {
+    process_stream_count();
+    packets.pop_front();
+    free_packets--;
+    total_packets_sent++;
+}
+
+bool Swing::iteratable() {
+    if (stream_count == 0 &&
+        free_packets == (parallel_reduce * 1)) {  // && not_delivered==0
+        exit();
+        return false;
+    }
+    return true;
+}
+
+void Swing::insert_packet(Callable* sender) {
+    if (zero_latency_packets == 0 && non_zero_latency_packets == 0) {
+        zero_latency_packets = parallel_reduce * 1;
+        non_zero_latency_packets =
+            get_non_zero_latency_packets();  //(nodes_in_ring-1)*parallel_reduce*1;
+        toggle = !toggle;
+    }
+    if (zero_latency_packets > 0) {
+        packets.push_back(MyPacket(
+            msg_size, stream->current_queue_id, curr_sender,
+            curr_receiver));  // vnet Must be changed for alltoall topology
+        packets.back().sender = sender;
+        locked_packets.push_back(&packets.back());
+        processed = false;
+        send_back = false;
+        NPU_to_MA = true;
+        process_max_count();
+        zero_latency_packets--;
+        return;
+    } else if (non_zero_latency_packets > 0) {
+        packets.push_back(MyPacket(
+            msg_size, stream->current_queue_id, curr_sender,
+            curr_receiver));  // vnet Must be changed for alltoall topology
+        packets.back().sender = sender;
+        locked_packets.push_back(&packets.back());
+        if (comType == ComType::Reduce_Scatter ||
+            (comType == ComType::All_Reduce && toggle)) {
+            processed = true;
+        } else {
+            processed = false;
+        }
+        if (non_zero_latency_packets <= parallel_reduce * 1) {
+            send_back = false;
+        } else {
+            send_back = true;
+        }
+        NPU_to_MA = false;
+        process_max_count();
+        non_zero_latency_packets--;
+        return;
+    }
+    Sys::sys_panic("should not inject nothing!");
+}
+
+bool Swing::ready() {
+    if (stream->state == StreamState::Created ||
+        stream->state == StreamState::Ready) {
+        stream->changeState(StreamState::Executing);
+    }
+    if (packets.size() == 0 || stream_count == 0 || free_packets == 0) {
+        return false;
+    }
+
+    MyPacket packet = packets.front();
+
+
+    Tick delay = 0; // used to wait for reconfiguration to finish before sending
+
+    // optional demand-aware reconfiguration between rounds
+    // reconfigSched& sched = reconfigSched::getScheduler();
+    // if (false){//sched.getDaMode() == true){
+    //     int curRoundNum = total_rounds - stream_count;
+    //     bool isReconfiguring = sched.reconfigure(this, curRoundNum, packet.msg_size);
+    //     delay = isReconfiguring ? sched.getReconfigDelay() : 0;
+    // }
+
+    // create and send flow
+    sim_request snd_req;
+    snd_req.srcRank = id;
+    snd_req.dstRank = packet.preferred_dest;
+    snd_req.tag = stream->stream_id;
+    snd_req.reqType = UINT8;
+    snd_req.vnet = this->stream->current_queue_id;
+    stream->owner->front_end_sim_send(
+        delay, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_dest,
+        stream->stream_id, &snd_req, Sys::FrontEndSendRecvType::COLLECTIVE,
+        &Sys::handleEvent,
+        nullptr);  // stream_id+(packet.preferred_dest*50)
+    sim_request rcv_req;
+    rcv_req.vnet = this->stream->current_queue_id;
+    RecvPacketEventHandlerData* ehd = new RecvPacketEventHandlerData(
+        stream, stream->owner->id, EventType::PacketReceived,
+        packet.preferred_vnet, packet.stream_id);
+    stream->owner->front_end_sim_recv(
+        0, Sys::dummy_data, packet.msg_size, UINT8, packet.preferred_src,
+        stream->stream_id, &rcv_req, Sys::FrontEndSendRecvType::COLLECTIVE,
+        &Sys::handleEvent,
+        ehd);  // stream_id+(owner->id*50)
+    reduce();
+    return true;
+}
+
+void Swing::exit() {
+    if (packets.size() != 0) {
+        packets.clear();
+    }
+    if (locked_packets.size() != 0) {
+        locked_packets.clear();
+    }
+    stream->owner->proceed_to_next_vnet_baseline((StreamBaseline*)stream);
+}

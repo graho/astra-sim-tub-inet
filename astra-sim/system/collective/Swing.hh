@@ -1,0 +1,73 @@
+/******************************************************************************
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+*******************************************************************************/
+
+#ifndef __SWING_HH__
+#define __SWING_HH__
+
+#include <list>
+
+#include "astra-sim/system/MemBus.hh"
+#include "astra-sim/system/MyPacket.hh"
+#include "astra-sim/system/collective/Algorithm.hh"
+#include "astra-sim/system/topology/RingTopology.hh"
+
+namespace AstraSim {
+
+class Swing : public Algorithm {
+  public:
+    Swing(ComType type,
+                    int id,
+                    RingTopology* ring_topology,
+                    uint64_t data_size);
+    virtual void run(EventType event, CallData* data);
+    int compute_rho(int step);
+    RingTopology::Direction specify_direction(int rho);
+    void update_partner_for_step(int step);
+    void process_stream_count();
+    void release_packets();
+    virtual void process_max_count();
+    void reduce();
+    bool iteratable();
+    virtual int get_non_zero_latency_packets();
+    void insert_packet(Callable* sender);
+    bool ready();
+    void exit();
+
+    RingTopology::Direction dimension;
+    MemBus::Transmition transmition;
+    int zero_latency_packets;
+    int non_zero_latency_packets;
+    int id;
+    int curr_receiver;
+    int curr_sender;
+    int nodes_in_ring;
+    int stream_count;
+    int total_rounds; //unchanged, whereas stream_count is decremented
+    int packets_received_this_round;// how many PacketReceived events we've seen in the current round    
+    int max_count;
+    int remained_packets_per_max_count;
+    int remained_packets_per_message;
+    int parallel_reduce;
+    bool swing_base_clockwise; // whether node 0 send clockwise in the current round, "swings" (changes) each round
+    PacketRouting routing;
+    InjectionPolicy injection_policy;
+    std::list<MyPacket> packets;
+    bool toggle;
+    long free_packets;
+    long total_packets_sent;
+    long total_packets_received;
+    uint64_t msg_size;
+    std::list<MyPacket*> locked_packets;
+    bool processed;
+    bool send_back;
+    bool NPU_to_MA;
+
+    int rank_offset;
+    double offset_multiplier;
+};
+
+}  // namespace AstraSim
+
+#endif /* __SWING_HH__ */

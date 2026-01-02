@@ -27,6 +27,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/collective/DoubleBinaryTreeAllReduce.hh"
 #include "astra-sim/system/collective/HalvingDoubling.hh"
 #include "astra-sim/system/collective/Ring.hh"
+#include "astra-sim/system/collective/Swing.hh"
 #include "astra-sim/system/scheduling/OfflineGreedy.hh"
 #include "astra-sim/system/topology/BasicLogicalTopology.hh"
 #include "astra-sim/system/topology/GeneralComplexTopology.hh"
@@ -562,6 +563,8 @@ CollectiveImpl* Sys::generate_collective_impl_from_input(
         return new CollectiveImpl(CollectiveImplType::HalvingDoubling);
     } else if (collective_impl_str == "oneHalvingDoubling") {
         return new CollectiveImpl(CollectiveImplType::OneHalvingDoubling);
+    } else if (collective_impl_str == "swing") {
+        return new CollectiveImpl(CollectiveImplType::Swing);
     } else {
         sys_panic("Cannot interpret collective implementations. Please check "
                   "the collective implementations in the sys"
@@ -1112,6 +1115,12 @@ CollectivePhase Sys::generate_collective_phase(
     } else if (collective_impl->type == CollectiveImplType::ChakraImpl) {
         string filename = ((ChakraCollectiveImpl*)collective_impl)->filename;
         CollectivePhase vn(this, queue_id, new ChakraImpl(filename, id));
+        return vn;
+    } else if (collective_impl->type == CollectiveImplType::Swing) {
+        CollectivePhase vn(this, queue_id,
+                           new Swing(collective_type, id,
+                                               (RingTopology*)topology,
+                                               data_size));
         return vn;
     } else {
         LoggerFactory::get_logger("system")->critical(
